@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefill
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker36010
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: modelserver
+          command: ["vllm", "serve"]
+          args:
+            - /ipfs/test/models/DeepSeek-V4-Flash-0731-FP8-mt/
+            - --served-model-name=DeepSeek-V4-Flash
+            - --host=0.0.0.0
+            - --port=8000
+            - --tensor-parallel-size=8
+            - --enable-expert-parallel
+            - --dtype=bfloat16
+            - --kv-cache-dtype=fp8
+            - --attention-backend=FLASHMLA
+            - --speculative-config={"method":"dspark","num_speculative_tokens":4}
+            - --async-scheduling
+            - --hf-overrides={"expert_dtype":"fp8"}
+            - --enable-chunked-prefill
+            - --long-prefill-token-threshold=8192
+            - --no-enable-prefix-caching
+            - --trust-remote-code
+            - --max-model-len=131072
+            - --max-num-seqs=16
+            - --max-num-batched-tokens=8192
+            - --gpu-memory-utilization=0.80
+            - --compilation-config={"mode":"NONE","cudagraph_mode":"NONE"}
+            - --disable-log-stats
+            - --disable-access-log-for-endpoints=/health,/metrics,/v1/models
+            - --kv-transfer-config
+            - '{"kv_connector":"MultiConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"MooncakeConnector","kv_role":"kv_producer"},{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both"}]}}'
+          env:
+            - name: MOONCAKE_CONFIG_PATH
+              value: /etc/mooncake/mooncake_config.json
+            - name: MOONCAKE_PREFERRED_SEGMENT
+              value: mooncake-client.mooncake.svc.cluster.local:50052
+            - name: PYTHONHASHSEED
+              value: "0"
+            - name: VLLM_MOONCAKE_BOOTSTRAP_PORT
+              value: "8998"
+            - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+              value: "120"
+            - name: VLLM_PLUGINS
+              value: musa,musa_custom_ops
+            - name: VLLM_WORKER_MULTIPROC_METHOD
+              value: spawn
+            - name: MOONCAKE_OFFLOAD_FILE_STORAGE_PATH
+              value: /data/mooncake-offload
+            - name: MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR
+              value: bucket_storage_backend
+          ports:
+            - $patch: replace
+            - name: modelserver
+              containerPort: 8000
+              protocol: TCP
+            - name: mc-bootstrap
+              containerPort: 8998
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "32"
+              memory: 128Gi
+              mthreads.com/gpu: "8"
+            limits:
+              memory: 256Gi
+              mthreads.com/gpu: "8"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: modelserver
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: modelserver
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe: null
+          securityContext:
+            capabilities:
+              add: [IPC_LOCK]
+            seccompProfile:
+              type: Unconfined
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: deepseek-model
+              mountPath: /ipfs/test/models/DeepSeek-V4-Flash-0731-FP8-mt
+              readOnly: true
+            - name: mooncake-config
+              mountPath: /etc/mooncake
+              readOnly: true
+            - name: mooncake-offload-storage
+              mountPath: /data/mooncake-offload
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+        - name: deepseek-model
+          hostPath:
+            path: /ipfs/test/models/DeepSeek-V4-Flash-0731-FP8-mt
+            type: Directory
+        - name: mooncake-config
+          configMap:
+            name: mooncake-store-config
+        - name: mooncake-offload-storage
+          hostPath:
+            path: /mnt/mooncake-offload
+            type: DirectoryOrCreate
