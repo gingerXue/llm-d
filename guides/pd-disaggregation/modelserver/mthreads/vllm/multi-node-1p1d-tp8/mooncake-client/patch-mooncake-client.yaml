@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mooncake-client
+spec:
+  template:
+    spec:
+      containers:
+        - name: mooncake-client
+          args:
+            - "--master_server_address=mooncake-master-store.mooncake.svc.cluster.local:50051"
+            - "--host=$(POD_IP)"
+            - "--port=50052"
+            - "--protocol=tcp"
+            - "--global_segment_size=5GB"
+            - "--local_buffer_size=512MB"
+            - "--enable_offload=true"
+            - "--metadata_server=P2PHANDSHAKE"
+          resources:
+            $patch: replace
+            requests:
+              cpu: "2"
+              memory: 6Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
