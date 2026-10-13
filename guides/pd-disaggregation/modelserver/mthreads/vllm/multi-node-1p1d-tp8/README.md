@@ -4,13 +4,14 @@
 
 - Prefill：`worker36010`，TP=8，申请 8 个 `mthreads.com/gpu`；
 - Decode：`worker36018`，TP=8，申请 8 个 `mthreads.com/gpu`；
-- 1P1D 资源参数按 cookbook 对齐：Prefill 131072/16/0.80，Decode
-  131072/64/0.95；Prefill 开启 chunked prefill，Decode 使用 FULL_DECODE_ONLY
-  capture sizes；
+- 1P1D 资源参数：Prefill 131072/16/0.80，Decode 131072/64/0.80；两端
+  开启 chunked prefill，`max-num-batched-tokens=8192`，Decode 使用
+  FULL_DECODE_ONLY capture sizes；
 - 模型：`/ipfs/test/models/DeepSeek-V4-Flash-0731-FP8-mt/`；
 - served model name：`DeepSeek-V4-Flash`；
 - 模型服务镜像：`registry.mthreads.com/mcconline/inference/vllm:v0.28.0-ph1-5.2.0-torch2.11.0.post2-20261001`；
-- P/D KV：`MooncakeConnector`，TCP；
+- P/D KV：`MooncakeConnector`，`mooncake_protocol=tcp` 且设置
+  `MC_FORCE_TCP=1`；
 - 共享 KV Store：`MooncakeStoreConnector`，`MultiConnector`；
 - Mooncake Store：standalone-store 模式，TCP 配置，Master 和 Client 资源位于
   `mooncake` namespace。
@@ -44,7 +45,7 @@ kubectl kustomize "${CLIENT_OVERLAY}"
 kubectl apply --dry-run=client -k "${CLIENT_OVERLAY}"
 ~~~
 
-由于当前集群尚未创建 `mooncake` namespace，直接对包含 Namespace 的完整 Master
+如果集群尚未创建 `mooncake` namespace，直接对包含 Namespace 的完整 Master
 overlay 做 server dry-run 时，后续 namespaced 资源可能报告 namespace 不存在；
 client dry-run 和完整渲染可用于检查资源结构。实际部署时先应用 Master 和 Client
 overlay，再应用模型 overlay。
@@ -61,19 +62,57 @@ kubectl apply -k "${CLIENT_OVERLAY}"
 kubectl apply -n "${NAMESPACE}" -k "${OVERLAY}"
 ~~~
 
-随后再部署 llm-d Router/EPP 和 InferencePool，最后通过 Router 的 OpenAI
-兼容端点发送一条请求。仅 Pod `Running` 或 HTTP 200 不能证明 KV Store/P&D
-链路成功，还要检查 Prefill、Decode 和 Mooncake 日志中的 connector 初始化及
-实际 KV transfer。
+本集群的 `llm-d-mt` namespace 已有 optimized-baseline release，其 Envoy
+ConfigMap 名为 `envoy`；P/D Router 使用专用 values 避免同名冲突，并把 EPP
+调度到已有镜像缓存的 `worker36010`：
 
-## Validation status
+~~~bash
+helm upgrade --install pd-disaggregation \
+  oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+  --version v0 -n "${NAMESPACE}" \
+  -f "${REPO_ROOT}/guides/recipes/router/base.values.yaml" \
+  -f "${REPO_ROOT}/guides/pd-disaggregation/router/pd-disaggregation.values.yaml" \
+  -f "${OVERLAY}/router.values.yaml"
+kubectl get pods,inferencepool -n "${NAMESPACE}"
+~~~
+
+最后通过 `pd-disaggregation-epp` Service 的 OpenAI 兼容端点发请求。
+验收必须看到非空生成 token、正常的 `finish_reason`、EPP 同时发现 Prefill 和
+Decode、两端请求日志以及没有 KV transfer 错误；仅 Pod `Running` 或 HTTP 200
+不够。直连 `MooncakeConnector` 的 P2P KV 传输不经过 standalone Store，故
+Master 的 Put/Get=0 不能单独判定 P/D 失败。
+
+## Validation status (2026-10-12)
+
+- `worker36010` Prefill TP=8 为 `1/1 Ready`，`worker36018` Decode TP=8 为
+  `2/2 Ready`，P/D EPP 为 `2/2 Ready`，两端本轮重启次数为 0；Mooncake Master
+  和两个 Client 均为 Ready。
+- 两端日志显示 `The Mooncake Transfer Engine is using tcp as its protocol`。
+  仅指定 `mooncake_protocol=tcp` 时仍曾出现跨节点
+  `MusaTransport: cudaIpcOpenMemHandle failed: invalid argument` 和 Decode
+  `Mooncake transfer engine returned -1`；加入 `MC_FORCE_TCP=1` 后，三次请求
+  均未复现该错误。
+- 经 `pd-disaggregation-epp` Service 的短请求返回 HTTP 200、16 个生成 token，
+  耗时 2.69 秒；1291-token prompt 连续两次请求都返回 HTTP 200、32 个生成 token，
+  耗时 13.23 秒和 7.14 秒。Prefill 日志显示请求源为 Decode Pod IP，Decode
+  日志显示请求源为 EPP Pod IP，两端分别记录了三次 200 响应。这验证了本轮
+  TCP P/D 请求路径和实际生成，不代表 RDMA 已验证。
+- 之前的 Decode `max-num-batched-tokens=8192` + 禁用 chunked prefill 因小于
+  `max-model-len=131072` 启动失败；将 batch 提到 131072 又在 KV profiling
+  阶段 OOM。当前启用 chunked prefill、batch=8192、显存利用率=0.80，已通过
+  启动和上述请求。
+- DeepSeek 冷启动的 TileLang 编译/图预热超过 Deployment 默认 600 秒进度期限，
+  当前 `progressDeadlineSeconds=1800`。启动期间以 Pod readiness 和日志判断，
+  不要仅依据旧的 `ProgressDeadlineExceeded` condition。
+- 本轮未做高并发、故障恢复或 RDMA/RoCE 性能测试。
+
+### Prior checks
 
 - 两台节点上的模型目录已确认存在；
 - 两台节点都能访问新模型目录，`config.json` 声明 `model_type=deepseek_v4` 和
   `DeepseekV4ForCausalLM`；
-- `post2-20261001` 镜像已在 36.10 的 Kubernetes containerd 中导入，并在该节点
-  完成单节点 TP=8 启动和 HTTP 推理冒烟；36.18 仍需在租约可用后导入其 Kubernetes
-  containerd；
+- `post2-20261001` 镜像此前在 36.10 的 Kubernetes containerd 中导入，并在该节点
+  完成单节点 TP=8 启动和 HTTP 推理冒烟；本次已在 36.18 启动 Decode；
 - Mooncake Master/Client 使用同一 MThreads vLLM 镜像，该镜像已确认包含
   `mooncake_master` 和 `mooncake_client`；
 - 本轮参数依据
@@ -88,15 +127,12 @@ kubectl apply -n "${NAMESPACE}" -k "${OVERLAY}"
   `/v1/chat/completions` 请求返回 `200`；
 - Mooncake Master/Client 的 TCP 进程可以启动并注册客户端，Prefill 也完成了
   Mooncake Transfer Engine Scheduler 初始化；Master 指标显示 `Clients: 2`，但
-  `Keys: 0` 且 Put/Get 均为 0。本轮 Decode 被临时缩容为 0，未产生 P/D 请求，
+  `Keys: 0` 且 Put/Get 均为 0。此前单节点检查中 Decode 被临时缩容为 0，未产生 P/D 请求，
   因此没有真实 KV transfer 证据；
-- 当前 overlay 仍是 TCP 配置，不能据此宣称已验证 RDMA、RoCE 或完整双机 1P1D。
-  36.18 本轮只有 7 张 broker 可分配卡，无法安全启动 TP8 Decode；双机验证需要
-  在资源可用后重新导入镜像并按 cookbook 的 RDMA/HCA 配置运行。
+- 上述仅是此前单机检查结果；双机 TCP 结果见本节开头，仍不能宣称已验证 RDMA/RoCE。
 
-配置已与 cookbook 的 1P1D 参数对齐，并在 worker36010 以 Decode=0 的方式实际启动
-了 Prefill；本次 128K/graph profile 的 `/health`、`/v1/models` 和单请求推理均通过。
-这仍不是双机 1P1D 端到端验证。
+此前在 worker36010 以 Decode=0 的方式验证过 Prefill；本次已进一步完成双机
+TCP P/D 实际请求验证。
 
 本次使用 `post2-20261001` 镜像在 `worker36010` 做了单节点 TP=8 启动验证（Decode
 临时缩容为 0）：
@@ -109,8 +145,8 @@ kubectl apply -n "${NAMESPACE}" -k "${OVERLAY}"
 - 同步增加 `FLASHMLA`、DSpark-4 和 MUSA 多进程环境变量；
 - Prefill/Decode 均挂载 `/mnt/mooncake-offload` 到 `/data/mooncake-offload`，供
   `MooncakeStoreConnector` 使用本地 offload 存储；
-- 模型权重加载、vLLM HTTP 服务和单请求推理均已验证；P/D KV transfer 仍待双机
-  Decode 实例和真实请求验证。
+- 当时只验证了模型权重加载、vLLM HTTP 服务和单请求推理；P/D KV transfer
+  尚未验证。双机 TCP 结果见本节开头。
 
 ## Previous model test (2026-10-09)
 
