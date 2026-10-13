@@ -9,8 +9,8 @@ data:
       "metadata_server": "P2PHANDSHAKE",
       "master_server_address": "mooncake-master-store.mooncake.svc.cluster.local:50051",
       "global_segment_size": 0,
-      "local_buffer_size": "1GB",
+      "local_buffer_size": "0",
       "protocol": "tcp",
       "device_name": "",
-      "enable_offload": true
+      "enable_offload": false
     }

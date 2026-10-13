@@ -4,6 +4,7 @@ metadata:
   name: prefill
 spec:
   replicas: 1
+  progressDeadlineSeconds: 1800
   strategy:
     type: Recreate
   template:
@@ -39,8 +40,10 @@ spec:
             - --disable-log-stats
             - --disable-access-log-for-endpoints=/health,/metrics,/v1/models
             - --kv-transfer-config
-            - '{"kv_connector":"MultiConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"MooncakeConnector","kv_role":"kv_producer"},{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both"}]}}'
+            - '{"kv_connector":"MultiConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"MooncakeConnector","kv_role":"kv_producer","kv_connector_extra_config":{"mooncake_protocol":"tcp"}},{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both"}]}}'
           env:
+            - name: MC_FORCE_TCP
+              value: "1"
             - name: MOONCAKE_CONFIG_PATH
               value: /etc/mooncake/mooncake_config.json
             - name: MOONCAKE_PREFERRED_SEGMENT
@@ -55,10 +58,6 @@ spec:
               value: musa,musa_custom_ops
             - name: VLLM_WORKER_MULTIPROC_METHOD
               value: spawn
-            - name: MOONCAKE_OFFLOAD_FILE_STORAGE_PATH
-              value: /data/mooncake-offload
-            - name: MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR
-              value: bucket_storage_backend
           ports:
             - $patch: replace
             - name: modelserver
@@ -106,8 +105,6 @@ spec:
             - name: mooncake-config
               mountPath: /etc/mooncake
               readOnly: true
-            - name: mooncake-offload-storage
-              mountPath: /data/mooncake-offload
       volumes:
         - name: dshm
           emptyDir:
@@ -120,7 +117,3 @@ spec:
         - name: mooncake-config
           configMap:
             name: mooncake-store-config
-        - name: mooncake-offload-storage
-          hostPath:
-            path: /mnt/mooncake-offload
-            type: DirectoryOrCreate

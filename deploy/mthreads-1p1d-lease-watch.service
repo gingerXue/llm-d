@@ -1,0 +1,20 @@
+[Unit]
+Description=llm-d MThreads DeepSeek 1P1D lease watcher
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=xuejingzhi
+Group=xuejingzhi
+WorkingDirectory=/home/xuejingzhi/documents/repo/llm-d
+Environment=LLM_D_REPO_ROOT=/home/xuejingzhi/documents/repo/llm-d
+EnvironmentFile=-/etc/llm-d/mthreads-1p1d-lease-watch.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/llm-d/watch_mthreads_1p1d_lease.py
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
