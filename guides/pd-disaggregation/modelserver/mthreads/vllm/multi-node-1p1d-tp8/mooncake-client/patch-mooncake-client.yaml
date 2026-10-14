@@ -14,7 +14,9 @@ spec:
             - "--protocol=tcp"
             - "--global_segment_size=5GB"
             - "--local_buffer_size=512MB"
-            - "--enable_offload=true"
+            # First validation uses the standalone DRAM tier only.  SSD
+            # offload is enabled in a separate A/B test after Put/Get works.
+            - "--enable_offload=false"
             - "--metadata_server=P2PHANDSHAKE"
           resources:
             $patch: replace

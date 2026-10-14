@@ -38,7 +38,7 @@ spec:
             - --compilation-config={"mode":"NONE","cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[1,2,3,4,5,8,15,16,24,32,40,48,56,64,80]}
             - --disable-access-log-for-endpoints=/health,/metrics,/v1/models
             - --kv-transfer-config
-            - '{"kv_connector":"MultiConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"MooncakeConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"mooncake_protocol":"tcp"}},{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer"}]}}'
+            - '{"kv_connector":"MultiConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"MooncakeConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"mooncake_protocol":"tcp"}},{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both"}]}}'
           env:
             - name: MC_FORCE_TCP
               value: "1"
@@ -101,6 +101,8 @@ spec:
             - name: mooncake-config
               mountPath: /etc/mooncake
               readOnly: true
+            - name: mooncake-offload-storage
+              mountPath: /data/mooncake-offload
       volumes:
         - name: dshm
           emptyDir:
@@ -113,3 +115,5 @@ spec:
         - name: mooncake-config
           configMap:
             name: mooncake-store-config
+        - name: mooncake-offload-storage
+          emptyDir: {}

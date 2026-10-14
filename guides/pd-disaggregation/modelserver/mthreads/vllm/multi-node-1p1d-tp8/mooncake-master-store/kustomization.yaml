@@ -12,3 +12,4 @@ images:
 
 patches:
   - path: patch-snapshot-pvc.yaml
+  - path: patch-memory-store.yaml

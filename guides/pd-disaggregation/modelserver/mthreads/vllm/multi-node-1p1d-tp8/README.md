@@ -82,6 +82,73 @@ Decode、两端请求日志以及没有 KV transfer 错误；仅 Pod `Running` �
 不够。直连 `MooncakeConnector` 的 P2P KV 传输不经过 standalone Store，故
 Master 的 Put/Get=0 不能单独判定 P/D 失败。
 
+## Mooncake Store 验证流程
+
+本 overlay 使用 `MultiConnector`：`MooncakeConnector` 负责 P/D 直连，
+`MooncakeStoreConnector` 负责共享 KV Store。Prefill 必须启用
+`--enable-prefix-caching`，否则不会生成可写入 Store 的 KV block。当前第一轮
+使用 TCP 和 standalone DRAM Store，Master、Client、vLLM 配置均关闭 SSD offload；
+SSD offload 需要单独做 A/B 测试。
+
+1. 检查控制面和客户端注册：
+
+   ```bash
+   kubectl -n mooncake get pods -o wide
+   kubectl -n mooncake logs deploy/mooncake-master-store --tail=100 \\
+     | rg 'Clients:|service_ready|error|segment'
+   ```
+
+   Master 应为 `service_ready=true`，并且 Clients 数量为 2。
+
+2. 检查 Store 初始化日志：
+
+   ```bash
+   kubectl -n llm-d-mt logs <prefill-or-decode-pod> -c modelserver \\
+     | rg 'standalone-store|Registered KV caches|Mooncake KV-load'
+   ```
+
+   应看到 `global_segment_size=0`、`Registering KV_Caches` 和
+   `Started ... Mooncake KV-load receive thread(s)`。
+
+3. 请求前后采集 Master 指标：
+
+   ```bash
+   MASTER=$(kubectl -n mooncake get pod -l \\
+     app.kubernetes.io/component=master-store -o jsonpath='{.items[0].metadata.name}')
+   kubectl -n mooncake exec "$MASTER" -- \\
+     sh -c 'curl -fsS http://127.0.0.1:9003/metrics' | \\
+     rg 'master_(allocated_bytes|put_start_requests_total|put_end_requests_total)|total_get_nums_|valid_get_nums_'
+   ```
+
+   真正使用 Store 时，`master_allocated_bytes`、PutStart/PutEnd、
+   `total_get_nums_` 和 `valid_get_nums_` 应出现正向增量。
+
+4. 检查 vLLM Store 指标：
+
+   ```bash
+   kubectl -n llm-d-mt exec <decode-pod> -c modelserver -- \\
+     sh -c 'curl -fsS http://127.0.0.1:8200/metrics' | \\
+     rg 'vllm:mooncake_store_operation_(total|bytes_total|failed_keys_total)'
+   ```
+
+   `operation_total` 和 `bytes_total` 必须大于 0，
+   `failed_keys_total` 必须保持为 0。
+
+5. 使用相同且超过一个 KV block 的 prompt 连续请求两次；第一次观察 Put，
+   第二次观察 Get。再将请求发到另一个 vLLM 实例或重启实例，验证跨实例复用。
+   `external_kv_transfer` 只能证明直连 `MooncakeConnector`，不能替代上述
+   Store Put/Get 指标。
+
+本轮验证记录：overlay 渲染和 server dry-run 通过；Master/Client 启动并注册，
+两端出现 Store 初始化日志；两次请求返回 HTTP 200，但请求 prompt 只有 133 tokens，
+小于当前 256-token KV block，因此 Master 的 Put/Get 仍为 0；Decode 的
+`external_kv_transfer` 从 0 增至 266，说明本轮请求走的是直连 P/D 路径，
+不能据此判定 Store 失效。下一轮必须使用超过 256 tokens 的相同 prefix，才能观察
+Store Put/Get。随后租约 watcher 因租约过期删除了 `mooncake`
+namespace，重启时出现 `Initialize MooncakeDistributedStore failed` 和
+`Failed to create client after 20 retries`；该次属于部署生命周期/租约问题，不能
+作为 Store 数据路径失败结论。
+
 ## Validation status (2026-10-12)
 
 - `worker36010` Prefill TP=8 为 `1/1 Ready`，`worker36018` Decode TP=8 为

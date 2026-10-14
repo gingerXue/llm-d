@@ -30,7 +30,8 @@ spec:
             - --hf-overrides={"expert_dtype":"fp8"}
             - --enable-chunked-prefill
             - --long-prefill-token-threshold=8192
-            - --no-enable-prefix-caching
+            # MooncakeStoreConnector needs vLLM block hashes to Put KV blocks.
+            - --enable-prefix-caching
             - --trust-remote-code
             - --max-model-len=131072
             - --max-num-seqs=16
@@ -105,6 +106,8 @@ spec:
             - name: mooncake-config
               mountPath: /etc/mooncake
               readOnly: true
+            - name: mooncake-offload-storage
+              mountPath: /data/mooncake-offload
       volumes:
         - name: dshm
           emptyDir:
@@ -117,3 +120,5 @@ spec:
         - name: mooncake-config
           configMap:
             name: mooncake-store-config
+        - name: mooncake-offload-storage
+          emptyDir: {}
