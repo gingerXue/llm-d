@@ -5,6 +5,16 @@ metadata:
 spec:
   template:
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - worker36010
+                      - worker36018
       containers:
         - name: mooncake-client
           args:
@@ -14,10 +24,27 @@ spec:
             - "--protocol=tcp"
             - "--global_segment_size=5GB"
             - "--local_buffer_size=512MB"
-            # First validation uses the standalone DRAM tier only.  SSD
-            # offload is enabled in a separate A/B test after Put/Get works.
-            - "--enable_offload=false"
+            - "--enable_offload=true"
             - "--metadata_server=P2PHANDSHAKE"
+            - "--vmodule=file_storage=1"
+          env:
+            - name: MC_TCP_MAX_QUEUED_TRANSFERS_PER_PEER
+              value: "65535"
+            - name: MC_TCP_MAX_PENDING_ADMISSIONS_PER_PEER
+              value: "65535"
+            - name: MOONCAKE_OFFLOAD_FILE_STORAGE_PATH
+              value: /data/mooncake-offload
+            - name: MOONCAKE_OFFLOAD_STORAGE_BACKEND_DESCRIPTOR
+              value: bucket_storage_backend
+            - name: MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES
+              value: "21474836480"
+            - name: MOONCAKE_OFFLOAD_BUCKET_MAX_TOTAL_SIZE
+              value: "21474836480"
+            - name: MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES
+              value: "21474836480"
+            # Flush small functional-test batches instead of waiting for the default 500 keys.
+            - name: MOONCAKE_OFFLOAD_BUCKET_KEYS_LIMIT
+              value: "8"
           resources:
             $patch: replace
             requests:

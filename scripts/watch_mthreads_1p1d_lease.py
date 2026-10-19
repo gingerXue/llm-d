@@ -27,6 +27,7 @@ GPU_COUNT = int(os.getenv("MTHREADS_DECODE_GPUS", "8"))
 POOL = os.getenv("GPU_BROKER_POOL", "开发资源池")
 POLL_SECONDS = int(os.getenv("GPU_BROKER_POLL_SECONDS", "5"))
 TTL_SECONDS = int(os.getenv("GPU_BROKER_TTL_SECONDS", "7200"))
+RENEW_INTERVAL_SECONDS = int(os.getenv("GPU_BROKER_RENEW_INTERVAL_SECONDS", "60"))
 EXPECTED_MINUTES = int(os.getenv("GPU_BROKER_EXPECTED_MINUTES", "120"))
 OWNER = os.getenv("GPU_BROKER_OWNER", "llm-d-mt-watch")
 TASK = os.getenv("GPU_BROKER_TASK", "DeepSeek-V4 1P1D TP8 validation")
@@ -151,7 +152,7 @@ def acquire() -> tuple[str, str]:
 
 
 def renew(lease_id: str, token: str) -> None:
-    call_tool(
+    result = call_tool(
         "gpu_renew",
         {
             "lease_id": lease_id,
@@ -159,7 +160,8 @@ def renew(lease_id: str, token: str) -> None:
             "expected_minutes": EXPECTED_MINUTES,
         },
     )
-    LOG.info("renewed lease %s", lease_id)
+    expires_at = _find_key(result.get("structuredContent", {}), "expires_at")
+    LOG.info("renewed lease %s (expires_at=%s)", lease_id, expires_at)
 
 
 def release(lease_id: str, token: str) -> None:
@@ -242,12 +244,14 @@ def run() -> int:
 
         deployment_started = True
         apply_deployment()
-        renew_at = time.monotonic() + max(60, TTL_SECONDS // 3)
+        # The broker can cap the requested TTL; verify ownership frequently.
+        renew_interval = max(30, min(RENEW_INTERVAL_SECONDS, TTL_SECONDS // 3))
+        renew_at = time.monotonic() + renew_interval
         while not STOP:
-            time.sleep(min(POLL_SECONDS, 30))
+            time.sleep(min(POLL_SECONDS, 30, max(1, renew_at - time.monotonic())))
             if time.monotonic() >= renew_at:
                 renew(lease_id, token)
-                renew_at = time.monotonic() + max(60, TTL_SECONDS // 3)
+                renew_at = time.monotonic() + renew_interval
         return 0
     except (BrokerError, OSError, subprocess.CalledProcessError, RuntimeError) as exc:
         LOG.exception("lease/deployment service failed: %s", exc)

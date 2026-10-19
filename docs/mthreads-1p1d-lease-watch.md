@@ -33,6 +33,7 @@ MTHREADS_DECODE_NODE=10.20.36.18
 MTHREADS_DECODE_GPUS=8
 GPU_BROKER_POLL_SECONDS=30
 GPU_BROKER_TTL_SECONDS=7200
+GPU_BROKER_RENEW_INTERVAL_SECONDS=60
 GPU_BROKER_EXPECTED_MINUTES=120
 LLM_D_NAMESPACE=llm-d-mt
 LLM_D_CLEANUP_ON_STOP=true
@@ -48,6 +49,15 @@ sudo systemctl enable --now mthreads-1p1d-lease-watch.service
 systemctl status mthreads-1p1d-lease-watch.service
 journalctl -u mthreads-1p1d-lease-watch.service -f
 ```
+
+broker 可能把申请的 TTL 限制为更短时间；watcher 每 60 秒调用一次
+`gpu_renew` 并记录返回的 `expires_at`。续租失败时，它会退出、按逆序删除
+本部署的资源并尝试释放租约。`gpu_status` 报 `gpu_free=0` 时，即使宿主机
+显存已归零，也不能绕过 broker 直接部署。
+
+仓库脚本更新后，正在运行的系统级 unit 不会自动加载新代码。需在允许
+P/D 中断的维护窗口重新 `install` 脚本并重启 unit；重启会触发资源清理，
+再次申请租约后才会部署。不要同时运行系统级和用户级两个 watcher。
 
 ## 手工验证
 
