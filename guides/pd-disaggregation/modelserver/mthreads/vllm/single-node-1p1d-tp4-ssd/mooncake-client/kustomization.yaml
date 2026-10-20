@@ -1,8 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - ../../multi-node-1p1d-tp8/mooncake-client
-
-patches:
-  - path: patch-node.yaml

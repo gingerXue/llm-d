@@ -309,15 +309,6 @@ Prefill worker 曾退出并重启；重新加载期间，36.18 的 GPU 租约在
 恢复测试须先重新取得 36.18 的有效租约，并确认续租/回收策略；每次
 Client 或 Master 滚动更新后，协调重启两端 vLLM 以重建 Store 连接。
 
-36.18 被占用期间，可使用
-[`../single-node-1p1d-tp4-ssd`](../single-node-1p1d-tp4-ssd/README.md)
-在专属 36.10 上进行 Qwen3-32B TP4+TP4 的 Store/SSD 功能验证。
-2026-10-19 的单机结果包括 6k-token Store Put/SSD 写入、受控 Decode
-重启后的 Store Get，以及独立 SDK 的磁盘-only 读回和 Store 重启恢复；
-进一步通过填充 Store、重启 Decode 后重放固定长前缀，观察到 Master
-`file_cache_hit_nums_` 从 2 增至 17，证明单机 vLLM 路径发生 SSD 读取。
-这些结果不代表双机 DeepSeek-V4 路径通过。
-
 ### Earlier DRAM/P2P check
 
 此前验证记录：overlay 渲染和 server dry-run 通过；Master/Client 启动并注册，
